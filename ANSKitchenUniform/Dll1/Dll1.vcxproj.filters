@@ -51,6 +51,12 @@
     <ClInclude Include="ANSKitchenUniform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="third_party\onnxruntime\onnxruntime_c_api.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\onnxruntime\onnxruntime_ep_c_api.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -82,6 +88,9 @@
     </ClCompile>
     <ClCompile Include="..\..\ByteTrack\src\STrack.cpp">
       <Filter>Source Files\ByteTrack</Filter>
+    </ClCompile>
+    <ClCompile Include="detr.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>

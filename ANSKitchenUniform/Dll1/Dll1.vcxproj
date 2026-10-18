@@ -165,6 +165,8 @@
     <ClInclude Include="ANSKitchenUniform.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="third_party\onnxruntime\onnxruntime_c_api.h" />
+    <ClInclude Include="third_party\onnxruntime\onnxruntime_ep_c_api.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\ByteTrack\src\BYTETracker.cpp" />
@@ -175,6 +177,7 @@
     <ClCompile Include="..\..\ByteTrack\src\STrack.cpp" />
     <ClCompile Include="ANSByteTrack.cpp" />
     <ClCompile Include="ANSKitchenUniform.cpp" />
+    <ClCompile Include="detr.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
