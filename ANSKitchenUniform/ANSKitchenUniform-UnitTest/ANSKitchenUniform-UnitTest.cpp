@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
     }
 
     const std::vector<std::string> expectedNames{
-        "ChefHat", "FaceMask", "KitchenGloves", "Apron",
+        "ChefHat", "FaceMask", "KitchenGloves", "Apron", "CheckWrongColor",
         "AlertAfterSecond", "CompliantRecheck", "KeepTrackObj"
     };
     if (customParams.Parameters.size() != expectedNames.size()) {
@@ -135,9 +135,10 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    if (customParams.Parameters[4].DefaultValue != "5" ||
-        customParams.Parameters[5].DefaultValue != "60" ||
-        customParams.Parameters[6].DefaultValue != "5") {
+    if (customParams.Parameters[4].DefaultValue != "true" ||
+        customParams.Parameters[5].DefaultValue != "5" ||
+        customParams.Parameters[6].DefaultValue != "60" ||
+        customParams.Parameters[7].DefaultValue != "5") {
         std::cerr << "Unexpected alert/recheck/track-retention defaults." << std::endl;
         return 1;
     }
@@ -241,6 +242,7 @@ int main(int argc, char** argv) {
             eventLog << "[EVENT] frame=" << frameIndex << " class=" << event.className
                 << " track=" << event.trackId << " confidence=" << std::fixed
                 << std::setprecision(3) << event.confidence;
+            if (!event.extraInfo.empty()) eventLog << ' ' << event.extraInfo;
             const auto personFrame = std::find_if(personFrames.begin(), personFrames.end(),
                 [&](const UniformDebugPersonFrame& candidate) {
                     return candidate.trackId == event.trackId;

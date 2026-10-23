@@ -64,6 +64,8 @@ private:
         std::chrono::duration<double> frontMissingDuration{};
         bool hasSeen = false;
         bool hasUniformCheck = false;
+        int framesSinceUniformInference = 5;
+        std::vector<ANSCENTER::Object> cachedUniformDetections;
         bool wasFrontMissing = false;
         bool compliant = false;
         bool alertRaised = false;
@@ -89,6 +91,7 @@ private:
     float _detectionScoreThreshold{ 0.5f };
 
     std::array<bool, 4> _requiredItems{ true, true, true, true };
+    bool _checkWrongColor = true;
     int _alertAfterSecond = 5;
     int _compliantRecheck = 60;
     int _keepTrackObj = 5;

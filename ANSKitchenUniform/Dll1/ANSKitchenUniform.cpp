@@ -612,7 +612,7 @@ bool ANSCustomTL::Initialize(const std::string& modelDirectory, float detectionS
 
         const std::filesystem::path modelDirectoryPath(_modelDirectory);
         const bool uniformResult = _uniformDetector->Initialize(
-            (modelDirectoryPath / "uniform.onnx").string(),
+            (modelDirectoryPath / "train_last.onnx").string(),
             (modelDirectoryPath / "uniform.names").string(),
             0.25f);
         const int poseResult = _poseDetector->LoadModelFromFolder(
@@ -667,6 +667,17 @@ bool ANSCustomTL::ConfigureParameters(CustomParams& param) {
         item.Value.clear();
         param.Parameters.push_back(std::move(item));
     }
+
+    CustomParameter checkWrongColor;
+    checkWrongColor.Name = "CheckWrongColor";
+    checkWrongColor.DataType = "Boolean";
+    checkWrongColor.NoOfDecimals = 0;
+    checkWrongColor.MaxValue = 0;
+    checkWrongColor.MinValue = 0;
+    checkWrongColor.StartValue = "true";
+    checkWrongColor.DefaultValue = "true";
+    checkWrongColor.Value.clear();
+    param.Parameters.push_back(std::move(checkWrongColor));
 
     CustomParameter alertAfterSecond;
     alertAfterSecond.Name = "AlertAfterSecond";
@@ -882,6 +893,13 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
                     _requiredItems[index] = value.empty() || parseBoolean(value);
                 }
             }
+            const auto wrongColorParam = std::find_if(_params.Parameters.begin(), _params.Parameters.end(),
+                [](const CustomParameter& item) { return item.Name == "CheckWrongColor"; });
+            if (wrongColorParam != _params.Parameters.end()) {
+                const std::string value = !wrongColorParam->Value.empty()
+                    ? wrongColorParam->Value : wrongColorParam->DefaultValue;
+                _checkWrongColor = value.empty() || parseBoolean(value);
+            }
             auto readInteger = [&](const std::string& name, int fallback, int maximum) {
                 auto param = std::find_if(_params.Parameters.begin(), _params.Parameters.end(),
                     [&](const CustomParameter& item) { return item.Name == name; });
@@ -942,7 +960,7 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
         }
 
         trackStates.reserve(people.size());
-        bool shouldRunUniform = false;
+        bool shouldProcessUniform = false;
         std::set<int> currentTrackIds;
         for (const auto& person : people) {
             currentTrackIds.insert(person.trackId);
@@ -953,9 +971,10 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
             state.lastSeenTime = currentTime;
             state.hasSeen = true;
             trackStates.push_back(&state);
+            ++state.framesSinceUniformInference;
             const bool recheckDue = _compliantRecheck == 0 || !state.hasUniformCheck ||
                 currentTime - state.lastUniformCheckTime >= std::chrono::seconds(_compliantRecheck);
-            if (!state.compliant || recheckDue) shouldRunUniform = true;
+            if (!state.compliant || recheckDue) shouldProcessUniform = true;
         }
 
         for (auto it = _uniformTracks.begin(); it != _uniformTracks.end();) {
@@ -970,7 +989,7 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
             }
         }
 
-        if (!shouldRunUniform) {
+        if (!shouldProcessUniform) {
             renderDebugFrame("uniform check cached");
             return results;
         }
@@ -980,24 +999,34 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
         detectionsByPerson.resize(people.size());
         for (size_t personIndex = 0; personIndex < people.size(); ++personIndex) {
             const auto& person = people[personIndex];
+            UniformTrackState& state = *trackStates[personIndex];
             const cv::Rect personCropBox = person.box & frameBounds;
             if (personCropBox.empty()) continue;
 
-            const cv::Mat personCrop = input(personCropBox);
-            const auto uniformStartTime = std::chrono::steady_clock::now();
-            const int uniformStatus = _uniformDetector->RunInference(
-                personCrop, camera_id.c_str(), detectionsByPerson[personIndex]);
-            if (_debugVisualizationEnabled) {
-                _debugUniformInferenceMilliseconds += std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - uniformStartTime).count();
-            }
-            if (uniformStatus != 1) {
-                std::cerr << "[ANSKitchenUniform] Uniform inference failed for track "
-                    << person.trackId << " with status " << uniformStatus << "." << std::endl;
-                renderDebugFrame("UNIFORM INFERENCE FAILED");
-                return results;
+            const bool recheckDue = _compliantRecheck == 0 || !state.hasUniformCheck ||
+                currentTime - state.lastUniformCheckTime >= std::chrono::seconds(_compliantRecheck);
+            const bool inferenceDue = !state.hasUniformCheck || recheckDue ||
+                (!state.compliant && state.framesSinceUniformInference >= 5);
+            if (inferenceDue) {
+                const cv::Mat personCrop = input(personCropBox);
+                state.cachedUniformDetections.clear();
+                const auto uniformStartTime = std::chrono::steady_clock::now();
+                const int uniformStatus = _uniformDetector->RunInference(
+                    personCrop, camera_id.c_str(), state.cachedUniformDetections);
+                if (_debugVisualizationEnabled) {
+                    _debugUniformInferenceMilliseconds += std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - uniformStartTime).count();
+                }
+                if (uniformStatus != 1) {
+                    std::cerr << "[ANSKitchenUniform] Uniform inference failed for track "
+                        << person.trackId << " with status " << uniformStatus << "." << std::endl;
+                    renderDebugFrame("UNIFORM INFERENCE FAILED");
+                    return results;
+                }
+                state.framesSinceUniformInference = 0;
             }
 
+            detectionsByPerson[personIndex] = state.cachedUniformDetections;
             for (auto& detection : detectionsByPerson[personIndex]) {
                 detection.box.x += personCropBox.x;
                 detection.box.y += personCropBox.y;
@@ -1056,7 +1085,8 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
                 const auto candidates = candidateDetections(static_cast<int>(item), person.box,
                     regions, detectionsByPerson[personIndex]);
                 const size_t maxColorCandidates = item == 3 ? 3u : 1u;
-                const size_t candidateLimit = (item == 1 || item == 3)
+                const bool checkItemColor = _checkWrongColor && (item == 1 || item == 3);
+                const size_t candidateLimit = checkItemColor
                     ? std::min(maxColorCandidates, candidates.size())
                     : std::min<size_t>(1, candidates.size());
                 const ANSCENTER::Object* detection = nullptr;
@@ -1064,7 +1094,7 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
                 std::string detectedColor;
                 for (size_t candidateIndex = 0; candidateIndex < candidateLimit; ++candidateIndex) {
                     const ANSCENTER::Object* candidate = candidates[candidateIndex];
-                    const int candidateColorStatus = (item == 1 || item == 3)
+                    const int candidateColorStatus = checkItemColor
                         ? classifyAllowedColor(colorAnalysisFrame, *candidate,
                             static_cast<int>(item), nullptr)
                         : 1;
@@ -1079,7 +1109,7 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
                     }
                 }
                 const bool found = detection != nullptr;
-                if (found && (item == 1 || item == 3) && colorStatus >= 0) {
+                if (found && checkItemColor && colorStatus >= 0) {
                     classifyAllowedColor(colorAnalysisFrame, *detection,
                         static_cast<int>(item), &detectedColor);
                 }
@@ -1168,6 +1198,14 @@ std::vector<CustomObject> ANSCustomTL::RunInference(const cv::Mat& input, const 
                 event.kps = person.kps;
                 event.cameraId = camera_id;
                 event.trackId = person.trackId;
+                bool firstReason = true;
+                for (size_t item = 0; item < kItemNames.size(); ++item) {
+                    const std::string& status = state.debugItemStatuses[item];
+                    if (!_requiredItems[item] || (status != "MISSING" && status != "WRONG_COLOR")) continue;
+                    if (!firstReason) event.extraInfo += "; ";
+                    event.extraInfo += status + ": " + kItemNames[item];
+                    firstReason = false;
+                }
                 results.push_back(std::move(event));
                 state.alertRaised = true;
             }
